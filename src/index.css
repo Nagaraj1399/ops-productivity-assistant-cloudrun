@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #030712;
+    color: #f1f5f9;
+  }
+}
+
+.font-cyber {
+  font-family: 'Chakra Petch', sans-serif;
+}
+
+.font-tech {
+  font-family: 'Share Tech Mono', monospace;
+}
+
+/* Robotic HUD Grid Pattern */
+.bg-robotic-grid {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+}
+
+/* Robotic HUD Corner Accents */
+.robotic-panel {
+  position: relative;
+  background: rgba(8, 14, 26, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.robotic-panel::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid #38bdf8;
+  border-left: 2px solid #38bdf8;
+  pointer-events: none;
+}
+
+.robotic-panel::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-bottom: 2px solid #38bdf8;
+  border-right: 2px solid #38bdf8;
+  pointer-events: none;
+}
+
+/* Pulse animation for robotic status and scanner */
+@keyframes robotic-scan {
+  0% { transform: translateY(0); opacity: 0.8; }
+  50% { transform: translateY(100%); opacity: 0.2; }
+  100% { transform: translateY(0); opacity: 0.8; }
+}
+
+.animate-robotic-scan {
+  animation: robotic-scan 4s ease-in-out infinite;
+}
+
+@keyframes audio-bars {
+  0%, 100% { height: 4px; }
+  50% { height: 16px; }
+}
+
+.animate-audio-bar-1 { animation: audio-bars 0.8s ease-in-out infinite 0.1s; }
+.animate-audio-bar-2 { animation: audio-bars 0.8s ease-in-out infinite 0.25s; }
+.animate-audio-bar-3 { animation: audio-bars 0.8s ease-in-out infinite 0.4s; }
+.animate-audio-bar-4 { animation: audio-bars 0.8s ease-in-out infinite 0.15s; }
+.animate-audio-bar-5 { animation: audio-bars 0.8s ease-in-out infinite 0.35s; }

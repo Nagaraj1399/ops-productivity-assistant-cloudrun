@@ -1,0 +1,8 @@
+{
+  "name": "Executive Operations Assistant",
+  "description": "Executive Operations & Productivity Assistant for business health monitoring, supply chain intelligence, and autonomous briefings with tool execution.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
