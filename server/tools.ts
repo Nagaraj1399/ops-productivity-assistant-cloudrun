@@ -3,6 +3,21 @@ import { opDb } from './data';
 
 // Tool Function Declarations for Gemini Function Calling
 export const functionDeclarations: FunctionDeclaration[] = [
+  // 1. check_daily_sales (Lab 3 Core Requirement)
+  {
+    name: 'check_daily_sales',
+    description: 'Retrieve detailed daily sales performance metrics: total gross revenue, average order value (AOV), daily transaction counts, top-performing SKUs, and lagging categories.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        date_str: {
+          type: Type.STRING,
+          description: 'The target date in YYYY-MM-DD format (defaults to current operational date "2026-09-03").'
+        }
+      }
+    }
+  },
+  // Backward compatibility alias for check_daily_sales
   {
     name: 'get_daily_sales_summary',
     description: 'Retrieve real-time sales performance metrics including gross sales, order count, AOV, top performer SKU, and lagging sectors for a given date.',
@@ -11,24 +26,62 @@ export const functionDeclarations: FunctionDeclaration[] = [
       properties: {
         date_str: {
           type: Type.STRING,
-          description: 'The date string in YYYY-MM-DD format (e.g. "2026-09-03").'
+          description: 'The date string in YYYY-MM-DD format.'
         }
       }
     }
   },
+  // 2. track_inventory (Lab 3 Core Requirement)
   {
-    name: 'check_low_inventory',
-    description: 'Continuously evaluate warehouse stock levels against safety thresholds to identify critical stockout risks and compute run-out forecasts.',
+    name: 'track_inventory',
+    description: 'Continuously evaluate warehouse inventory against dynamic safety thresholds. Identifies critically low stock items, full stock-outs, daily sales burn rates, and run-out day forecasts.',
     parameters: {
       type: Type.OBJECT,
       properties: {
         threshold: {
           type: Type.NUMBER,
-          description: 'Safety stock threshold limit (defaults to 15 if unspecified).'
+          description: 'Dynamic safety stock threshold limit (defaults to 15 if unspecified).'
+        },
+        include_out_of_stock: {
+          type: Type.BOOLEAN,
+          description: 'Flag to explicitly include zero-stock depleted items.'
         }
       }
     }
   },
+  // Backward compatibility alias for track_inventory
+  {
+    name: 'check_low_inventory',
+    description: 'Evaluate warehouse stock levels against safety thresholds to identify critical stockout risks and compute run-out forecasts.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        threshold: {
+          type: Type.NUMBER,
+          description: 'Safety stock threshold limit (defaults to 15).'
+        }
+      }
+    }
+  },
+  // 3. generate_daily_operations_summary (Lab 3 Core Requirement)
+  {
+    name: 'generate_daily_operations_summary',
+    description: 'Synthesize daily sales performance metrics and low-inventory risks into an actionable executive COO operational briefing with priority action items.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        date_str: {
+          type: Type.STRING,
+          description: 'Operational date in YYYY-MM-DD format (defaults to "2026-09-03").'
+        },
+        inventory_threshold: {
+          type: Type.NUMBER,
+          description: 'Inventory safety threshold for stockout risk auditing (default: 15).'
+        }
+      }
+    }
+  },
+  // Operational automation tools
   {
     name: 'calculate_reorder_quantity',
     description: 'Compute precise reorder quantities based on daily sales velocity, supplier lead time, and buffer safety stock.',
@@ -141,67 +194,198 @@ export const functionDeclarations: FunctionDeclaration[] = [
   }
 ];
 
-// Execution Implementation strictly grounded in the database
-export async function executeTool(name: string, args: Record<string, any>): Promise<any> {
-  switch (name) {
-    case 'get_daily_sales_summary': {
-      const dateStr = args.date_str || '2026-09-03';
-      const summary = opDb.getSalesSummary(dateStr);
+// Helper: Handle check_daily_sales with edge-case protection (zero sales, null date)
+function executeCheckDailySales(dateStr: string) {
+  try {
+    const summary = opDb.getSalesSummary(dateStr || '2026-09-03');
+    if (!summary || summary.grossSales === undefined) {
       return {
-        date: summary.date,
-        gross_sales: `$${summary.grossSales.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-        gross_sales_numeric: summary.grossSales,
-        order_count: summary.orderCount,
-        aov: `$${summary.aov.toFixed(2)}`,
-        conversion_rate: `${summary.conversionRate}%`,
-        top_performer: {
-          sku: summary.topPerformer.sku,
-          item_name: summary.topPerformer.name,
-          units_sold: summary.topPerformer.unitsSold,
-          revenue: `$${summary.topPerformer.revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-        },
-        lagging_sector: {
-          category: summary.laggingSector.category,
-          change_vs_7day: `${summary.laggingSector.changePctVs7Day}%`,
-          note: summary.laggingSector.note
-        },
-        category_breakdown: summary.categoryBreakdown
+        date: dateStr,
+        gross_revenue: '$0.00',
+        gross_revenue_numeric: 0,
+        average_order_value: '$0.00',
+        aov_numeric: 0,
+        daily_transactions: 0,
+        conversion_rate: '0.0%',
+        status: 'ZERO_SALES_RECORDED',
+        note: 'No transaction activity recorded for this period.'
       };
     }
 
-    case 'check_low_inventory': {
-      const threshold = Number(args.threshold) || 15;
-      const allItems = opDb.getInventory();
-      const lowItems = allItems.filter(item => item.currentStock <= threshold);
+    return {
+      date: summary.date,
+      revenue: `$${summary.grossSales.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+      revenue_numeric: summary.grossSales,
+      gross_sales: `$${summary.grossSales.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+      average_order_value: `$${summary.aov.toFixed(2)}`,
+      aov: `$${summary.aov.toFixed(2)}`,
+      aov_numeric: summary.aov,
+      daily_transactions: summary.orderCount,
+      order_count: summary.orderCount,
+      conversion_rate: `${summary.conversionRate}%`,
+      top_performer: {
+        sku: summary.topPerformer?.sku || 'N/A',
+        item_name: summary.topPerformer?.name || 'N/A',
+        units_sold: summary.topPerformer?.unitsSold || 0,
+        revenue: `$${(summary.topPerformer?.revenue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+      },
+      lagging_sector: {
+        category: summary.laggingSector?.category || 'None',
+        change_vs_7day: `${summary.laggingSector?.changePctVs7Day || 0}%`,
+        note: summary.laggingSector?.note || 'Within normal statistical deviation'
+      },
+      category_breakdown: summary.categoryBreakdown || []
+    };
+  } catch (err: any) {
+    return {
+      date: dateStr,
+      error: 'Failed to retrieve sales metrics',
+      details: err?.message || String(err),
+      gross_revenue: '$0.00',
+      daily_transactions: 0,
+      average_order_value: '$0.00'
+    };
+  }
+}
 
-      const itemsReport = lowItems.map(item => {
-        const daysRemaining = (item.currentStock / (item.dailyVelocity || 1)).toFixed(1);
-        return {
-          sku: item.sku,
-          item_name: item.name,
-          current_stock: `${item.currentStock} units`,
-          stock_numeric: item.currentStock,
-          safety_min: `${item.safetyMin} units`,
-          safety_min_numeric: item.safetyMin,
-          daily_velocity: `${item.dailyVelocity} units/day`,
-          days_until_stockout: `${daysRemaining} days`,
-          recommended_reorder: `${item.reorderQuantity} units`,
-          recommended_reorder_numeric: item.reorderQuantity,
-          status: item.status,
-          supplier: item.supplier
-        };
-      });
+// Helper: Handle track_inventory with edge-case protection (full stockouts, dynamic threshold)
+function executeTrackInventory(thresholdValue: number, includeOutOfStock: boolean = true) {
+  try {
+    const threshold = Number.isFinite(thresholdValue) ? thresholdValue : 15;
+    const allItems = opDb.getInventory();
+
+    const lowItems = allItems.filter(item => {
+      if (item.currentStock <= 0) return includeOutOfStock;
+      return item.currentStock <= threshold;
+    });
+
+    const stockoutCount = allItems.filter(i => i.currentStock <= 0).length;
+
+    const itemsReport = lowItems.map(item => {
+      const velocity = item.dailyVelocity > 0 ? item.dailyVelocity : 0.5;
+      const daysRemaining = (item.currentStock / velocity).toFixed(1);
+      const isStockout = item.currentStock <= 0;
 
       return {
-        threshold_inspected: threshold,
-        total_items_inspected: allItems.length,
-        critical_items_count: itemsReport.length,
-        items: itemsReport,
-        draft_pos_available: [
-          { po_id: 'PO-102-9841', sku: 'SKU-102', quantity: 25 },
-          { po_id: 'PO-205-9842', sku: 'SKU-205', quantity: 15 }
-        ]
+        sku: item.sku,
+        item_name: item.name,
+        current_stock: `${item.currentStock} units`,
+        stock_numeric: item.currentStock,
+        safety_min: `${item.safetyMin} units`,
+        safety_min_numeric: item.safetyMin,
+        daily_velocity: `${item.dailyVelocity} units/day`,
+        days_until_stockout: isStockout ? '0.0 days (DEPLETED)' : `${daysRemaining} days`,
+        stockout_risk: isStockout ? 'CRITICAL_STOCKOUT' : item.currentStock <= item.safetyMin ? 'HIGH_RISK' : 'MODERATE_RISK',
+        recommended_reorder: `${item.reorderQuantity} units`,
+        recommended_reorder_numeric: item.reorderQuantity,
+        supplier: item.supplier,
+        status: isStockout ? 'OUT_OF_STOCK' : item.status
       };
+    });
+
+    return {
+      threshold_inspected: threshold,
+      total_catalog_items: allItems.length,
+      low_stock_count: itemsReport.length,
+      full_stockout_count: stockoutCount,
+      stockout_risk_flag: itemsReport.length > 0,
+      critical_items: itemsReport,
+      items: itemsReport,
+      action_recommended: itemsReport.length > 0
+        ? `Execute supplier purchase orders for ${itemsReport.length} critically low SKU(s).`
+        : 'All inventory is above dynamic safety stock thresholds.'
+    };
+  } catch (err: any) {
+    return {
+      error: 'Failed to inspect inventory levels',
+      details: err?.message || String(err),
+      total_catalog_items: 0,
+      low_stock_count: 0,
+      critical_items: []
+    };
+  }
+}
+
+// Helper: Handle generate_daily_operations_summary (combines sales + inventory into executive briefing)
+function executeGenerateDailyOperationsSummary(dateStr: string, inventoryThreshold: number = 15) {
+  const targetDate = dateStr || '2026-09-03';
+  const sales = executeCheckDailySales(targetDate);
+  const inventory = executeTrackInventory(inventoryThreshold, true);
+  const pendingOrders = opDb.getPurchaseOrders().filter(p => p.status === 'draft' || p.status === 'queued');
+  const tasks = opDb.getTasks().filter(t => t.status !== 'completed');
+
+  const briefing = {
+    briefing_date: targetDate,
+    executive_verdict: inventory.low_stock_count > 0 ? 'ACTION REQUIRED: SUPPLY CHAIN THRESHOLD BREACH' : 'OPTIMAL: RUNNING WITHIN TARGETS',
+    financial_summary: {
+      gross_revenue: sales.gross_sales || sales.revenue || '$0.00',
+      daily_transactions: sales.daily_transactions || 0,
+      average_order_value: sales.average_order_value || '$0.00',
+      conversion_rate: sales.conversion_rate || '0%',
+      top_performing_sku: sales.top_performer?.sku || 'N/A',
+      lagging_sector: sales.lagging_sector?.category || 'None'
+    },
+    inventory_health: {
+      total_catalog_items: inventory.total_catalog_items,
+      at_risk_sku_count: inventory.low_stock_count,
+      full_stockout_count: inventory.full_stockout_count,
+      critical_skus: inventory.critical_items.map((i: any) => ({
+        sku: i.sku,
+        name: i.item_name,
+        stock: i.current_stock,
+        days_left: i.days_until_stockout,
+        action: `Reorder ${i.recommended_reorder} from ${i.supplier}`
+      }))
+    },
+    procurement_pipeline: {
+      pending_draft_orders_count: pendingOrders.length,
+      orders: pendingOrders.map(p => ({
+        po_id: p.id,
+        sku: p.sku,
+        quantity: p.quantity,
+        total_cost: `$${p.totalCost.toFixed(2)}`,
+        status: p.status
+      }))
+    },
+    immediate_action_items: [
+      ...(inventory.critical_items.length > 0
+        ? [`Approve and dispatch restock purchase orders for ${inventory.critical_items[0].sku} (${inventory.critical_items[0].item_name})`]
+        : []),
+      ...(pendingOrders.length > 0
+        ? [`Authorize dispatch of ${pendingOrders.length} pending draft POs to automated supplier logistics`]
+        : []),
+      ...(tasks.length > 0
+        ? [`Fulfill high-priority operational task: ${tasks[0].title}`]
+        : [])
+    ]
+  };
+
+  return briefing;
+}
+
+// Execution Implementation strictly grounded in the database
+export async function executeTool(name: string, args: Record<string, any>): Promise<any> {
+  switch (name) {
+    // 1. check_daily_sales & alias
+    case 'check_daily_sales':
+    case 'get_daily_sales_summary': {
+      const dateStr = args.date_str || '2026-09-03';
+      return executeCheckDailySales(dateStr);
+    }
+
+    // 2. track_inventory & alias
+    case 'track_inventory':
+    case 'check_low_inventory': {
+      const threshold = Number(args.threshold) || 15;
+      const includeOos = args.include_out_of_stock !== false;
+      return executeTrackInventory(threshold, includeOos);
+    }
+
+    // 3. generate_daily_operations_summary
+    case 'generate_daily_operations_summary': {
+      const dateStr = args.date_str || '2026-09-03';
+      const threshold = Number(args.inventory_threshold) || 15;
+      return executeGenerateDailyOperationsSummary(dateStr, threshold);
     }
 
     case 'calculate_reorder_quantity': {

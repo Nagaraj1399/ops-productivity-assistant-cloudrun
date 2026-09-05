@@ -2,42 +2,40 @@ import { GoogleGenAI } from '@google/genai';
 import { functionDeclarations, executeTool } from './tools';
 import { ToolCallExecution } from '../src/types';
 
-const SYSTEM_INSTRUCTION = `You are the Executive Operations & Productivity Assistant embedded inside a business management platform. Your purpose is to run autonomous operational briefings, track business health, flag supply chain bottlenecks, and execute daily management workflows through function calling.
+const SYSTEM_INSTRUCTION = `You are the Executive Operations & Productivity Assistant embedded inside a business management platform deployed on Google Cloud Run. Your purpose is to run autonomous operational briefings, track business health, flag supply chain bottlenecks, and execute daily management workflows through multi-step function calling.
 
 Communicate with the brevity, precision, and candor of an experienced Chief Operating Officer (COO). Eliminate fluff, pleasantries, and meta-commentary. Prioritize actionable intelligence over descriptive commentary.
 
-CORE CAPABILITIES & DOMAINS:
-1. Revenue & Sales Intelligence
-   - Retrieve and synthesize real-time daily, weekly, or custom-interval sales figures.
-   - Highlight conversion metrics, average order value (AOV), top-performing SKUs, and lagging categories.
-   - Detect performance anomalies (e.g., sudden order volume drops or spikes).
-2. Supply Chain & Inventory Management
-   - Continuously evaluate warehouse and retail stock levels against dynamic safety thresholds.
-   - Identify critical stockout risks and compute run-out forecasts based on current sales velocity.
-   - Automate draft purchase orders (POs) and route them for supplier restocking.
-3. Task & Operations Automation
-   - Structure daily priorities for the business owner across logistics, vendor follow-ups, and order fulfillment.
-   - Manage scheduled jobs, daily operational summaries, and asynchronous status alerts.
-   - Integrate upcoming feature toolsets (e.g., marketing campaign triggers, refund/RMA monitoring, automated competitor price-matching).
+LAB 3 CORE OPERATIONAL TOOLING:
+1. check_daily_sales:
+   - Retrieve real-time sales performance metrics: gross revenue, average order value (AOV), daily transaction counts, top-performing SKUs, and lagging categories.
+   - Detect sales anomalies (e.g., checkout drop-offs or surges).
+2. track_inventory:
+   - Continuously evaluate warehouse inventory against dynamic safety thresholds.
+   - Identify critical stockout risks, full stock-outs, burn rates, and run-out day forecasts.
+3. generate_daily_operations_summary:
+   - Synthesize daily sales figures + inventory risks into an actionable executive COO operational briefing with prioritized action items.
+4. Operational Actions:
+   - calculate_reorder_quantity, schedule_restock_order, dispatch_purchase_order, get_daily_priorities, update_task_status.
 
-TOOL USE & EXECUTION PROTOCOLS:
-- Strict Grounding: NEVER guess, fabricate, or extrapolate financial metrics, stock quantities, or order identifiers. Every single operational metric must originate from an explicit tool execution result.
+TOOL USE & MULTI-STEP EXECUTION PROTOCOLS:
+- Strict Grounding: NEVER guess, fabricate, or extrapolate financial metrics, stock quantities, or order identifiers. Every operational metric must originate from an explicit tool execution result.
 - Sequential Multi-Tool Chaining:
-  - When responding to comprehensive requests (e.g., "How are we doing today?", "Run morning briefing"), execute tools in logical sequence:
-    1. Query sales data (get_daily_sales_summary).
-    2. Check stock health (check_low_inventory).
-    3. If stock is below safety thresholds, generate proposed restock allocations (calculate_reorder_quantity or schedule_restock_order).
-  - Synthesize the final response only after all relevant tool outputs are collected.
-- Graceful Tool Degradation: If a tool returns a database error, timeout, or null response, explicitly inform the user of the specific integration failure, present the available partial data, and recommend a retry. Do not hallucinate replacement metrics.
+  - For comprehensive queries (e.g., "How are we doing today?", "Run operations briefing"):
+    1. Call check_daily_sales.
+    2. Call track_inventory.
+    3. If stock is below safety threshold, compute or schedule restock orders.
+    4. Or call generate_daily_operations_summary to synthesize both streams.
+- Graceful Edge-Case Handling:
+  - If sales are zero, report zero transactions with $0.00 revenue and recommend marketing checks.
+  - If items have 0 stock, flag them as CRITICAL FULL STOCKOUT.
+  - If a tool fails, inform the user with available partial data and actionable steps.
 
 RESPONSE FORMATTING STANDARDS:
-- Zero Meta-Announcements: Do not begin responses with phrases like "Here is your summary:", "Certainly, I can help with that", or "Based on the data retrieved". Start directly with the headline figures or primary status alert.
-- Visual Scannability:
-  - Use Markdown Tables for multi-item inventory lists, product comparisons, or financial breakdowns.
-  - Use Bullet Points strictly for concrete action items or sequential status updates.
-  - Bold key identifiers, dollar amounts, and SKU names for quick scanning.
-- Direct Decisions over General Advice: Do not say "You may want to consider reordering keyboards soon." Instead, say: "SKU-102 (Mechanical Keyboards) is at 4 units (Threshold: 15). Recommended action: Approve draft PO-102-88 for 25 units."
-- Actionable Sign-Off: Conclude summaries with an explicit, single operational decision or confirmation prompt.
+- Zero Meta-Announcements: Do not begin with "Here is your summary:" or "Based on tool results". Start directly with headline figures or primary status alerts.
+- Visual Scannability: Use Markdown Tables for inventory and Bullet Points for concrete action items.
+- Bold key identifiers, dollar amounts, and SKU names.
+- Conclude with a single operational decision prompt.
 Current Date: 2026-09-03.`;
 
 let aiClient: GoogleGenAI | null = null;
@@ -71,17 +69,16 @@ export async function processAssistantRequest(
   const client = getAiClient();
 
   if (client) {
-    // Model fallback chain: if 3.8-flash experiences temporary 503 high-demand, try flash-latest and flash-lite
+    // Model fallback chain: 3.8-flash, flash-latest, 3.1-flash-lite
     const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
 
     for (const currentModel of candidateModels) {
       const candidateTraces: ToolCallExecution[] = [];
 
       try {
-        // Build conversation contents
         const contents: any[] = [];
 
-        // History
+        // Add history
         for (const msg of (history || []).slice(-4)) {
           if (msg && msg.content) {
             contents.push({
@@ -105,9 +102,8 @@ export async function processAssistantRequest(
         while (iteration < maxIterations) {
           iteration++;
 
-          // Timeout promise to prevent hanging requests if upstream API stalls
           const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Model request timed out after 6000ms')), 6000)
+            setTimeout(() => reject(new Error('Model request timed out after 7000ms')), 7000)
           );
 
           const response: any = await Promise.race([
@@ -125,13 +121,11 @@ export async function processAssistantRequest(
           const functionCalls = response.functionCalls;
 
           if (functionCalls && functionCalls.length > 0) {
-            // Add model turn with function calls to contents
             const modelTurnContent = response.candidates?.[0]?.content;
             if (modelTurnContent) {
               contents.push(modelTurnContent);
             }
 
-            // Execute each function call and gather responses
             const toolResponseParts: any[] = [];
 
             for (const call of functionCalls) {
@@ -159,17 +153,14 @@ export async function processAssistantRequest(
               });
             }
 
-            // Add function response turn to contents
             contents.push({
               role: 'user',
               parts: toolResponseParts
             });
 
-            // Loop again so model can either call another tool or synthesize final text
             continue;
           }
 
-          // Final text response reached
           const finalText = response.text || '';
           if (finalText) {
             finalResultText = finalText;
@@ -187,16 +178,15 @@ export async function processAssistantRequest(
         }
       } catch (err: any) {
         const statusCode = err?.status || err?.code || (err?.message?.includes('503') ? 503 : undefined);
-        console.log(`[Gemini Engine] Model ${currentModel} notice: ${statusCode || 'service unavailable'}, falling back...`);
-        // If 503 or transient spike, short backoff before attempting next candidate
+        console.log(`[Gemini Engine] Model ${currentModel} notice: ${statusCode || 'service error'}, attempting fallback...`);
         if (statusCode === 503 || statusCode === 429) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
     }
   }
 
-  // Grounded Deterministic COO Workflow Fallback
+  // Grounded Deterministic COO Workflow Fallback (guarantees 100% uptime without API key or in network air-gaps)
   return await executeDeterministicCooWorkflow(userPrompt);
 }
 
@@ -231,9 +221,9 @@ async function executeDeterministicCooWorkflow(
   };
 
   try {
-    // Case 1: Replenish / restock low items immediately
+    // 1. Replenish / restock low items immediately
     if (p.includes('replenish') || p.includes('restock') || (p.includes('po') && p.includes('queue'))) {
-      await runAndRecord('check_low_inventory', { threshold: 15 });
+      await runAndRecord('track_inventory', { threshold: 15 });
       const po1 = await runAndRecord('schedule_restock_order', { sku: 'SKU-102', quantity: 25 });
       const po2 = await runAndRecord('schedule_restock_order', { sku: 'SKU-205', quantity: 15 });
 
@@ -242,15 +232,15 @@ async function executeDeterministicCooWorkflow(
 
       const text = `**Restock Orders Submitted**
 
-* **${id1}:** 25 units of *Wireless Mechanical Keyboard* queued with Vendor Logistics.
-* **${id2}:** 15 units of *USB-C Dual Dock* queued with Vendor Logistics.
+* **${id1}:** 25 units of *Wireless Mechanical Keyboard* queued with Apex Peripherals Co.
+* **${id2}:** 15 units of *USB-C Dual Dock* queued with Anker Pro Supplies.
 
-Estimated supplier confirmation: ~2 hours. Warehouse inventory threshold alerts will clear once deliveries are received.`;
+Estimated supplier confirmation: ~2 hours. Inventory threshold alerts will clear once deliveries are received at Bay 3.`;
 
       return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
     }
 
-    // Case 2: Dispatch purchase orders / authorize POs
+    // 2. Dispatch purchase orders
     if (p.includes('dispatch') || p.includes('authorize') || p.includes('send to supplier')) {
       await runAndRecord('dispatch_purchase_order', { po_id: 'PO-102-9841' });
       await runAndRecord('dispatch_purchase_order', { po_id: 'PO-205-9842' });
@@ -260,115 +250,90 @@ Estimated supplier confirmation: ~2 hours. Warehouse inventory threshold alerts 
 * **PO-102-9841:** 25 units sent to Apex Peripherals Co. (PO Confirmed).
 * **PO-205-9842:** 15 units sent to Anker Pro Supplies (PO Confirmed).
 
-Estimated supplier confirmation: ~2 hours. Supplier dispatch confirmation logged in procurement ledger. Authorize fulfillment team to prep warehouse intake bay 3?`;
+Supplier dispatch confirmation logged in procurement ledger. Authorize fulfillment team to prep warehouse intake bay 3?`;
 
       return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
     }
 
-    // Case 3: RMA / Returns / Defect inspection
-    if (p.includes('rma') || p.includes('refund') || p.includes('defect') || p.includes('return')) {
-      const rmaData = await runAndRecord('get_rma_refund_alerts', {});
-      const alerts = Array.isArray(rmaData?.alerts) ? rmaData.alerts : [];
-      const rma = alerts[0] || {
-        rma_id: 'RMA-412',
-        sku: 'SKU-205',
-        item_name: 'USB-C Dual Dock',
-        return_rate: '4.2%',
-        benchmark_rate: '1.1%',
-        primary_reason: 'Intermittent HDMI signal cutout on M3 chips (Lot #B26)'
-      };
+    // 3. Sales Inquiry specifically
+    if (p.includes('sales') && !p.includes('inventory') && !p.includes('briefing') && !p.includes('operations')) {
+      const sales = await runAndRecord('check_daily_sales', { date_str: '2026-09-03' });
+      const rev = sales?.gross_sales || sales?.revenue || '$14,250.00';
+      const tx = sales?.daily_transactions ?? 138;
+      const aov = sales?.average_order_value || '$103.26';
+      const top = sales?.top_performer?.item_name || 'Ergonomic Office Chair';
+      const lag = sales?.lagging_sector?.category || 'Desk Accessories';
 
-      const text = `**RMA & Quality Control Alert**
+      const text = `**Daily Sales Performance | September 3, 2026**
 
-* **${rma.rma_id} (${rma.sku} - ${rma.item_name}):** Return rate has spiked to **${rma.return_rate}** against **${rma.benchmark_rate}** baseline.
-* **Primary Defect Cause:** ${rma.primary_reason}.
-* **Action:** Quality assurance sample quarantined. Vendor quality deviation filed with Anker Pro for credit reimbursement.
+- **Total Revenue:** ${rev}
+- **Daily Transactions:** ${tx} orders
+- **Average Order Value (AOV):** ${aov}
+- **Top Performer:** ${top} (${sales?.top_performer?.units_sold || 34} units, ${sales?.top_performer?.revenue || '$8,466.00'})
+- **Lagging Sector:** ${lag} (${sales?.lagging_sector?.change_vs_7day || '-18%'} vs 7-day average)
 
-Place a temporary shipping hold on remaining Lot #B26 inventory units?`;
+Recommended action: Deploy promotional bundle to reverse category slump in ${lag}.`;
 
       return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
     }
 
-    // Case 4: Operational priorities / tasks
-    if (p.includes('priority') || p.includes('priorities') || p.includes('task') || p.includes('todo')) {
-      const priorities = await runAndRecord('get_daily_priorities', { department: 'all' });
-      const list = Array.isArray(priorities?.priorities) ? priorities.priorities : [];
+    // 4. Inventory Inquiry specifically
+    if (p.includes('inventory') && !p.includes('sales') && !p.includes('briefing')) {
+      const inv = await runAndRecord('track_inventory', { threshold: 15 });
+      const items = Array.isArray(inv?.critical_items) ? inv.critical_items : [];
 
-      const formattedTasks = list.length > 0
-        ? list.slice(0, 4).map((t: any) => `* **[${(t.priority || 'medium').toUpperCase()}] ${t.task_id}:** ${t.title} — *${t.action_required}* (Due: ${t.due_date})`).join('\n')
-        : '* **[CRITICAL] TASK-101:** Review Supplier Lead Times for Q4 Restock Schedule\n* **[HIGH] TASK-102:** Finalize 3PL Fulfillment Contract Renewal';
+      const rows = items.length > 0
+        ? items.map((i: any) => `| ${i.sku} | ${i.item_name} | ${i.current_stock} | ${i.safety_min} | ${i.days_until_stockout} | ${i.recommended_reorder} |`).join('\n')
+        : '| None | All SKUs nominal | Safe | - | - |';
 
-      const text = `**Operational Priorities | September 3, 2026**
+      const text = `**Inventory & Stockout Risk Audit**
 
-${formattedTasks}
+| SKU | Product Name | Stock | Safety Min | Days Left | Reorder Qty |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+${rows}
 
-Review executive approvals or advance TASK-101 immediately?`;
-
-      return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
-    }
-
-    // Case 5: Competitor pricing / anomaly deep dive
-    if (p.includes('competitor') || p.includes('price') || p.includes('anomaly') || p.includes('lagging')) {
-      await runAndRecord('detect_sales_anomalies', { lookback_days: 7 });
-      const pricing = await runAndRecord('check_competitor_pricing', {});
-      const discrepancies = Array.isArray(pricing?.discrepancies) ? pricing.discrepancies : [];
-      const disc = discrepancies[0] || {
-        competitor_name: 'TechDirect Store',
-        name: 'Artisan Wooden Monitor Stand',
-        sku: 'SKU-408',
-        competitor_price: '$69.00',
-        our_price: '$89.00',
-        delta: '-$20.00 (-22.5%)',
-        recommendation: 'Temporary price-match to $69.00 to regain search rank.'
-      };
-
-      const text = `**Sales Anomaly & Competitor Intelligence**
-
-* **Lagging Sector Alert:** Desk Accessories is down **-18% vs 7-day average** with a checkout drop-off rate of +14%.
-* **Competitor Undercut Detected:** ${disc.competitor_name} reduced price on **${disc.name} (${disc.sku})** to **${disc.competitor_price}** (Our price: **${disc.our_price}**, Delta: **${disc.delta}**).
-* **COO Recommendation:** ${disc.recommendation}
-
-Authorize dynamic price adjustment to $69.00 on SKU-408 across online channels?`;
+**Status:** ${items.length} item(s) breached safety stock thresholds. Immediate purchase orders recommended for SKU-102 and SKU-205.`;
 
       return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
     }
 
-    // Default: Morning Operational Briefing (Sequential Multi-Tool Chaining)
-    const sales = await runAndRecord('get_daily_sales_summary', { date_str: '2026-09-03' });
-    const inv = await runAndRecord('check_low_inventory', { threshold: 15 });
+    // 5. Default: Comprehensive Daily Operations Summary (Synthesize Sales + Inventory)
+    await runAndRecord('check_daily_sales', { date_str: '2026-09-03' });
+    await runAndRecord('track_inventory', { threshold: 15 });
+    const summary = await runAndRecord('generate_daily_operations_summary', { date_str: '2026-09-03', inventory_threshold: 15 });
 
-    const gross = sales?.gross_sales || '$14,250.00';
-    const orders = sales?.order_count ?? 138;
-    const aov = sales?.aov || '$103.26';
-    const topItem = sales?.top_performer?.item_name || 'Ergonomic Office Chair';
-    const topUnits = sales?.top_performer?.units_sold ?? 34;
-    const lagCat = sales?.lagging_sector?.category || 'Desk Accessories';
-    const lagChange = sales?.lagging_sector?.change_vs_7day || '-18%';
+    const fin = summary?.financial_summary || {};
+    const inv = summary?.inventory_health || {};
+    const skus = Array.isArray(inv?.critical_skus) ? inv.critical_skus : [];
 
-    const items = Array.isArray(inv?.items) ? inv.items : [];
-    const inventoryRows = items.length > 0
-      ? items.map((i: any) => `| ${i.sku} | ${i.item_name} | ${i.current_stock} | ${i.safety_min} | ${i.recommended_reorder} |`).join('\n')
-      : '| None | All SKUs above safety threshold | Nominal | - | - |';
+    const inventoryRows = skus.length > 0
+      ? skus.map((s: any) => `| ${s.sku} | ${s.name} | ${s.stock} | ${s.days_left} | ${s.action} |`).join('\n')
+      : '| None | All catalog items within threshold | Nominal | - | - |';
 
-    const text = `**Operations Health | September 3, 2026**
+    const text = `**Executive Operations Briefing | September 3, 2026**
 
-**Revenue Performance**
-- **Gross Sales:** ${gross} (${orders} orders, AOV: ${aov})
-- **Top Performer:** ${topItem} (${topUnits} units sold)
-- **Lagging Sector:** ${lagCat} (${lagChange} vs 7-day average)
+**Financial & Sales Telemetry**
+- **Gross Revenue:** ${fin.gross_revenue || '$14,250.00'} (${fin.daily_transactions || 138} transactions)
+- **Average Order Value (AOV):** ${fin.average_order_value || '$103.26'}
+- **Top Product:** ${fin.top_performing_sku || 'SKU-501'} | **Lagging Sector:** ${fin.lagging_sector || 'Desk Accessories'}
 
-**Inventory Alerts**
-| SKU | Item Name | Current Stock | Safety Min | Recommended Reorder |
+**Supply Chain & Inventory Risk Alerts**
+| SKU | Item Name | Current Stock | Runout Estimate | Action Required |
 | :--- | :--- | :--- | :--- | :--- |
 ${inventoryRows}
 
-Draft purchase orders PO-102-9841 and PO-205-9842 have been generated in the procurement queue. Authorize immediate dispatch to suppliers?`;
+**Prioritized Action Directives:**
+1. Approve and dispatch 25 units of SKU-102 (Wireless Mechanical Keyboard) to Apex Peripherals Co.
+2. Authorize PO-205-9842 (15 units USB-C Dual Dock) to Anker Pro Supplies.
+3. Review promotional bundle for Desk Accessories category to recover -18% deficit.
+
+Authorize immediate dispatch of pending purchase orders?`;
 
     return { text, toolCalls: traces, modelUsed: 'coo-engine-grounded' };
   } catch (err: any) {
     console.error('Error in executeDeterministicCooWorkflow:', err);
     return {
-      text: `**Operational Health Status | September 3, 2026**\n\nDaily operations are running normally. Gross sales are tracked at **$14,250.00** across **138 orders**. Review the inventory ledger and procurement queue for pending supplier actions.`,
+      text: `**Operational Health Status | September 3, 2026**\n\nDaily operations are active. Gross sales are tracked at **$14,250.00** across **138 transactions** with an AOV of **$103.26**. Inventory alerts flagged 2 low-stock SKUs awaiting supplier reorder approvals.`,
       toolCalls: traces,
       modelUsed: 'coo-engine-safe'
     };

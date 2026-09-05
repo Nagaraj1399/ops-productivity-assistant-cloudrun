@@ -1,35 +1,84 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { opDb } from './server/data';
 import { processAssistantRequest } from './server/gemini';
+import { executeTool } from './server/tools';
 
 dotenv.config();
 
-const PORT = 3000;
+// Cloud Run dynamically injects the PORT environment variable (defaults to 3000 in dev)
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const HOST = '0.0.0.0';
 
 async function startServer() {
   const app = express();
 
+  // Cloud Run & API Security Middleware
+  app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
   app.use(express.json());
 
-  // Health check
-  app.get('/api/health', (req, res) => {
+  // Health check endpoint for Cloud Run container probes
+  app.get('/api/health', (_req, res) => {
     res.json({
-      status: 'ok',
-      service: 'Executive Operations Assistant API',
-      date: '2026-09-03',
-      geminiConfigured: Boolean(process.env.GEMINI_API_KEY)
+      status: 'healthy',
+      service: 'Personal Productivity Assistant - Operations Agent',
+      timestamp: new Date().toISOString(),
+      operational_date: '2026-09-03',
+      runtime: {
+        node_version: process.version,
+        platform: process.platform,
+        uptime_seconds: Math.floor(process.uptime()),
+        port: PORT,
+        host: HOST
+      },
+      gemini_configured: Boolean(process.env.GEMINI_API_KEY)
     });
   });
 
-  // Get full operational state
-  app.get('/api/state', (req, res) => {
+  // Get full operational state (Sales, Inventory, Purchase Orders, Tasks)
+  app.get('/api/state', (_req, res) => {
     res.json(opDb.getState());
   });
 
-  // Chat / Executive Briefing with Gemini & Function Calling
+  // Direct REST execution of Lab 3 Operational Tooling
+  app.get('/api/tools/check-daily-sales', async (req, res) => {
+    try {
+      const dateStr = (req.query.date as string) || '2026-09-03';
+      const result = await executeTool('check_daily_sales', { date_str: dateStr });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to check daily sales' });
+    }
+  });
+
+  app.get('/api/tools/track-inventory', async (req, res) => {
+    try {
+      const threshold = req.query.threshold ? Number(req.query.threshold) : 15;
+      const result = await executeTool('track_inventory', { threshold });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to track inventory' });
+    }
+  });
+
+  app.get('/api/tools/generate-operations-summary', async (req, res) => {
+    try {
+      const dateStr = (req.query.date as string) || '2026-09-03';
+      const result = await executeTool('generate_daily_operations_summary', { date_str: dateStr });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to generate operations summary' });
+    }
+  });
+
+  // Chat / Autonomous Executive Briefing with Gemini Multi-Tool Function Calling
   app.post('/api/chat', async (req, res) => {
     try {
       const { message, history } = req.body;
@@ -56,7 +105,7 @@ async function startServer() {
     }
   });
 
-  // Restock action
+  // REST endpoints for operations automation
   app.post('/api/operations/restock', (req, res) => {
     const { sku, quantity } = req.body;
     if (!sku || !quantity) {
@@ -71,7 +120,6 @@ async function startServer() {
     res.json({ success: true, po, state: opDb.getState() });
   });
 
-  // Dispatch PO action
   app.post('/api/operations/dispatch', (req, res) => {
     const { poId } = req.body;
     if (!poId) {
@@ -86,7 +134,6 @@ async function startServer() {
     res.json({ success: true, po, state: opDb.getState() });
   });
 
-  // Task status update
   app.post('/api/operations/task-status', (req, res) => {
     const { taskId, status } = req.body;
     if (!taskId || !status) {
@@ -101,7 +148,6 @@ async function startServer() {
     res.json({ success: true, task: updated, state: opDb.getState() });
   });
 
-  // Direct inventory adjustment
   app.post('/api/operations/stock-update', (req, res) => {
     const { sku, newStock } = req.body;
     if (!sku || newStock === undefined) {
@@ -116,7 +162,7 @@ async function startServer() {
     res.json({ success: true, item: updated, state: opDb.getState() });
   });
 
-  // Vite middleware for development
+  // Vite middleware for local development / Static serving for Cloud Run container production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -126,13 +172,13 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Executive COO Server] running on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[Personal Productivity Assistant API] Listening on http://${HOST}:${PORT} (Node ${process.version})`);
   });
 }
 
